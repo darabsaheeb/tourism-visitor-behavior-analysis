@@ -1,0 +1,347 @@
+---
+title: "Global Tourism Patterns and Visitor Behaviour in Dubai"
+author: "Darab Saheeb - 100877280"
+output:
+  html_document:
+    df_print: paged
+---
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(scales)
+library(RColorBrewer)
+library(viridis)
+library(ggalluvial)
+
+theme_set(theme_minimal())
+options(scipen = 999)
+```
+
+## Introduction
+
+This study uses two distinct but connected datasets to investigate tourism. The World Bank is the source of the first dataset, which includes foreign visitor arrivals for all nations from 1960 to 2020. This dataset is helpful for comparing nations over time and displaying broad geographic tourism trends. The second dataset, which includes individual-level records for 1,000 travelers, is from Kaggle and focuses on travel behavior in the United Arab Emirates. It takes into account factors including country of origin, reason for travel, kind of lodging, length of stay,and expenditure.
+
+These datasets were selected because they match each other nicely. Using rankings, time-series trends, and a choropleth map, the World Bank data allows for the study of tourism on a worldwide scale. Examining more specific visitor behavior, such as lodging preferences, expenditure, length of stay, and reason for travel, is made feasible by the UAE tourism dataset. When combined, they make it possible to examine tourism from both a global and personal standpoint.
+
+This report's primary inquiries are which nations welcomed the greatest number of foreign visitors in 2016 and how arrivals have evolved over time for particular nations.How do lodging options change depending on the reason for the trip? What are the differences in the average length of stay between the most popular countries of origin for tourists? Lastly, what trends exist between the purpose of travel and the origin of tourists?
+
+The graphics suggest that tourism is concentrated in a relatively small number of countries, while visitor behaviour in the UAE shows meaningful variation across accommodation, travel purpose, and country of origin. Together, the figures show that tourism can be understood both geographically and behaviourally.
+
+This report explores the following questions:
+1. Which countries received the most international tourist arrivals in 2016, and how do arrivals differ across the globe? (Figures 1 & 2)
+2. How have international tourist arrivals changed over time for selected countries? (Figure 3)
+3. How does accommodation type vary depending on a tourist's reason for travel? (Figure 4)
+4. Do tourists from different countries of origin stay for different lengths of time in the UAE? (Figure 5)
+5. Are there patterns between a tourist's country of origin and their travel purpose? (Figure 6)
+
+## Load and Prepare Data
+
+```{r load-data, message=FALSE, warning=FALSE}
+# Read Dubai individual tourist behaviour data
+tourism_raw <- read_excel("tourism_behavior_analysis_updated_data.xlsx")
+
+# Read World Bank country-level arrivals data in wide format
+world_raw <- read_csv("API_ST_INT_ARVL_DS2_en_csv_v2_1927083.csv", show_col_types = FALSE)
+
+# Clean Dubai dataset and convert relevant columns to factors
+tourism <- tourism_raw |>
+  mutate(
+    Country = recode(Country,
+                     "UK" = "United Kingdom",
+                     "USA" = "United States"),
+    Travel_Purpose = factor(Travel_Purpose),
+    Accommodation_Type = factor(Accommodation_Type),
+    Gender = factor(Gender),
+    With_Family = factor(With_Family)
+  ) |>
+  filter(
+    !is.na(Country),
+    !is.na(Travel_Purpose),
+    !is.na(Accommodation_Type),
+    !is.na(Stay_Duration_Days),
+    !is.na(Spending_USD)
+  )
+
+# Convert the world dataset from wide format to long format
+world_tidy <- world_raw |>
+  pivot_longer(
+    cols = `1960`:`2020`,
+    names_to = "Year",
+    values_to = "Arrivals"
+  ) |>
+  mutate(
+    Year = as.integer(Year),
+    Arrivals = as.numeric(Arrivals)
+  )
+
+# Keep only 2016 data for the map and ranking plots
+world_2016 <- world_tidy |>
+  filter(Year == 2016, !is.na(Arrivals))
+
+# Load Natural Earth world map geometry
+world_sf <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Join 2016 arrivals data to the world map using ISO country codes
+map_data <- world_sf |>
+  left_join(world_2016, by = c("iso_a3" = "Country Code"))
+```
+
+## Figure 1 - World Choropleth Map
+
+```{r fig1-map, fig.width=12, fig.height=6}
+ggplot(map_data) +
+  geom_sf(aes(fill = Arrivals), color = "grey70", linewidth = 0.1) +
+  scale_fill_viridis_c(
+    option = "C",
+    trans = "sqrt",
+    na.value = "grey92",
+    labels = label_number(scale_cut = cut_short_scale())
+  ) +
+  labs(
+    title = "International Tourist Arrivals by Country (2016)",
+    subtitle = "Darker countries received more international tourist arrivals; grey indicates no data",
+    fill = "Arrivals"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 11, colour = "grey40"),
+    legend.position = "right",
+    plot.margin = margin(10, 10, 10, 10)
+  )
+```
+
+This map shows the global distribution of tourist arrivals in 2016. France, the United States, and Spain stand out as the dominant destinations, while most of Africa and parts of Asia report comparatively low arrivals.
+
+## Figure 2 - Top 15 Countries
+
+```{r fig2-bar}
+# Remove World Bank aggregate and regional codes so only actual countries remain
+aggregate_codes <- c(
+  "WLD","HIC","OEC","PST","ECS","IDA","LMC","EUU","IBD","MIC",
+  "EMU","UMC","LDC","EAP","EAR","LIC","SSF","SAS","MEA","NAC",
+  "LAC","TSA","TSS","OSS","CSS","ARB","CEB","ECA","FCS","HPC",
+  "IBT","IDX","INX","LTE","MNA","OED","PRE","PSS","SSA","SST",
+  "TMN","TEC","TLA","AFE","AFW", "EAS","LCN","LMY","IDB","TEA","LMY"
+)
+
+top15_world <- world_2016 |>
+  filter(!`Country Code` %in% aggregate_codes) |>
+  slice_max(order_by = Arrivals, n = 15) |>
+  mutate(`Country Name` = fct_reorder(`Country Name`, Arrivals))
+
+ggplot(top15_world, aes(x = `Country Name`, y = Arrivals, fill = Arrivals)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_distiller(
+    palette = "YlOrBr",
+    direction = 1,
+    labels = label_number(scale_cut = cut_short_scale())
+  ) +
+  scale_y_continuous(labels = label_number(scale_cut = cut_short_scale())) +
+  labs(
+    title = "Top 15 Countries by International Tourist Arrivals (2016)",
+    x = NULL,
+    y = "Arrivals"
+  ) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    legend.position = "none",
+    axis.text.y = element_text(size = 9),
+    axis.ticks.y = element_blank(),
+    plot.margin = margin(10, 20, 10, 10)
+  )
+```
+
+This ranking plot confirms what the map suggested: France leads all individual countries by a clear margin, with Spain and the United States close behind. The gap between the top three and the rest of the list is substantial.
+
+## Figure 3 - Arrivals Over Time
+
+```{r fig3-line}
+selected_countries <- c("United Arab Emirates", "Canada", "France", "India", "Australia")
+
+world_selected <- world_tidy |>
+  filter(`Country Name` %in% selected_countries, !is.na(Arrivals))
+
+ggplot(world_selected, aes(x = Year, y = Arrivals, colour = `Country Name`)) +
+  geom_line(linewidth = 1) +
+  scale_x_continuous(breaks = seq(1995, 2020, by = 5)) +
+  scale_y_continuous(labels = label_number(scale_cut = cut_short_scale())) +
+  scale_colour_brewer(palette = "Dark2") +
+  labs(
+    title = "International Tourist Arrivals Over Time",
+    subtitle = "Selected countries shown for comparison",
+    x = "Year",
+    y = "Arrivals",
+    colour = "Country"
+  ) +
+  theme_light() +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 10)
+  )
+```
+
+France consistently leads in arrivals across the entire period shown. India and the UAE show the sharpest upward trends after 2010, suggesting rapid growth in inbound tourism during that period.
+
+
+## Figure 4 - Sankey Style Plot of Travel Purpose and Accommodation
+```{r fig4-sankey, fig.width=12, fig.height=7}
+sankey_data <- tourism |>
+  count(Travel_Purpose, Accommodation_Type) |>
+  mutate(
+    Travel_Purpose = factor(
+      Travel_Purpose,
+      levels = c("Medical", "Education", "Business", "Leisure")
+    ),
+    Accommodation_Type = factor(
+      Accommodation_Type,
+      levels = c("Resort", "Hotel", "Hostel", "Airbnb")
+    )
+  )
+
+ggplot(sankey_data,
+       aes(axis1 = Travel_Purpose, axis2 = Accommodation_Type, y = n)) +
+  geom_alluvium(
+    aes(fill = Travel_Purpose),
+    width     = 0.28,
+    alpha     = 0.82,
+    colour    = "white",
+    linewidth = 0.3,
+    knot.pos  = 0.38
+  ) +
+  geom_stratum(
+    width     = 0.28,
+    fill      = "grey88",
+    colour    = "grey45",
+    linewidth = 0.5
+  ) +
+  geom_text(
+    stat     = "stratum",
+    aes(label = after_stat(stratum)),
+    size     = 4.5,
+    fontface = "bold",
+    colour   = "grey15"
+  ) +
+  scale_x_discrete(
+    limits = c("Travel Purpose", "Accommodation Type"),
+    expand = c(0.14, 0.14)
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0.01))) +
+  labs(
+    title    = "Tourist Flow from Travel Purpose to Accommodation Type",
+    subtitle = "Flow width is proportional to number of tourists; Medical visitors favour Resorts and Hotels most",
+    x        = NULL,
+    y        = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title      = element_text(face = "bold", size = 16),
+    plot.subtitle   = element_text(colour = "grey35", size = 11),
+    panel.grid      = element_blank(),
+    axis.text.x     = element_text(face = "bold", size = 13, colour = "grey20"),
+    axis.text.y     = element_blank(),
+    axis.ticks      = element_blank(),
+    legend.position = "none",
+    plot.margin     = margin(10, 30, 10, 30)
+  )
+```
+
+This alluvial (Sankey-style) plot maps each travel purpose on the left to the accommodation type chosen on the right. Strata are ordered to reduce visual crossing — Medical travellers, who most strongly favour Resorts and Hotels, sit at the top of the left axis aligned with Resort and Hotel on the right. The width of each flowing band is proportional to the number of tourists.
+
+
+
+
+
+## Figure 5 - Average Stay Duration by Tourist Origin
+
+```{r fig6-lollipop}
+tourism |>
+  mutate(Country = forcats::fct_lump_n(Country, n = 6)) |>
+  filter(Country != "Other") |>
+  group_by(Country) |>
+  summarise(Avg_Stay = mean(Stay_Duration_Days, na.rm = TRUE)) |>
+  mutate(Country = fct_reorder(Country, Avg_Stay)) |>
+  ggplot(aes(x = Country, y = Avg_Stay)) +
+  geom_segment(aes(x = Country, xend = Country, y = 0, yend = Avg_Stay),
+               colour = "grey60", linewidth = 1) +
+  geom_point(aes(colour = Country), size = 5) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  coord_flip() +
+  labs(
+    title    = "Average Stay Duration by Tourist Origin",
+    subtitle = "Visitors from different countries stay for similar durations on average",
+    x        = NULL,
+    y        = "Average Stay Duration (Days)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title         = element_text(face = "bold", size = 15),
+    plot.subtitle      = element_text(colour = "grey40", size = 11),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor   = element_blank(),
+    legend.position    = "none",
+    axis.text.y        = element_text(size = 11)
+  )
+```
+
+This lollipop chart compares average stay duration across the most common tourist origin countries. The averages are quite similar, suggesting that visitors from these countries tend to stay for roughly similar lengths of time.
+
+## Figure 6 - Heatmap of Tourist Origin and Travel Purpose
+
+```{r fig7-heatmap}
+tourism |>
+  mutate(Country = forcats::fct_lump_n(Country, n = 6)) |>
+  filter(Country != "Other") |>
+  count(Country, Travel_Purpose) |>
+  ggplot(aes(x = Travel_Purpose, y = Country, fill = n)) +
+  geom_tile(colour = "white", linewidth = 0.8) +
+  geom_text(aes(label = n), size = 4, fontface = "bold", colour = "grey20") +
+  scale_fill_distiller(palette = "YlOrRd", direction = 1) +
+  labs(
+    title    = "Number of Tourists by Origin and Travel Purpose",
+    subtitle = "Darker cells indicate more tourists from that country with that travel purpose",
+    x        = "Travel Purpose",
+    y        = NULL,
+    fill     = "Count"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title         = element_text(face = "bold", size = 15),
+    plot.subtitle      = element_text(colour = "grey40", size = 11),
+    panel.grid         = element_blank(),
+    axis.text.x        = element_text(size = 10, face = "bold"),
+    axis.text.y        = element_text(size = 11),
+    legend.position    = "right"
+  )
+```
+
+This heatmap shows the number of tourists for each combination of country of origin and travel purpose. Darker cells indicate higher counts, making it easier to spot the strongest country-purpose combinations at a glance.
+
+
+## Conclusion
+
+Overall, the images demonstrate how tourism trends vary significantly between nations as well as within categories of traveler behavior. According to the global tourism dataset, foreign arrivals are concentrated in a limited number of nations, with France leading the way. Growth trends vary among nations, with areas like India and the United Arab Emirates exhibiting significant increases over time. The UAE tourism information reveals that the average stay duration is quite comparable among the major tourist origin nations, and that accommodation choices vary significantly by travel purpose. Additionally, the heatmap demonstrates that rather than being dominated by a single distinct pattern, tourist origin and travel purpose combinations are dispersed throughout multiple categories. Together, these graphics demonstrate that tourism can be studied both geographically and behaviourally, and that using multiple visualisation types gives a clearer picture of the topic.
+
+## References
+
+- World Bank tourism arrivals dataset: https://data.worldbank.org/indicator/ST.INT.ARVL
+- Dubai tourism behaviour dataset (Kaggle): https://www.kaggle.com/datasets/muhamamdumeraliriaz/tourism-behavior-analysis-in-uae
+- Natural Earth world map data: https://www.naturalearthdata.com/
+- https://www.kaggle.com/datasets/ayushggarg/international-tourism-demographics 
+
+## AI Prompts
+
+- Show me how to build a choropleth map in R using sf and ggplot2.
+- Help me turn a wide country-year dataset into tidy long format using pivot_longer.
+- Show me how to make an alluvial plot in R using ggalluvial.
+- Help me improve my ggplot scales and themes for a tourism report.
+- Help me examine these tourism datasets by identifying important variables, suggesting useful comparisons, and pointing out data cleaning steps before I build my visualisations.
